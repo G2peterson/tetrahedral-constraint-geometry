@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cone + F1 — Final</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#e8e8e8; overflow:hidden; font-family:monospace; }
+  canvas { display:block; }
+  #legend-tr {
+    position:absolute; top:12px; right:12px;
+    font:10px monospace; line-height:1.9; color:#333;
+    text-align:right; pointer-events:none;
+  }
+  #controls {
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    display:flex; flex-wrap:wrap; gap:5px; justify-content:center;
+    max-width:95vw;
+  }
+  .ctrl-group {
+    display:flex; gap:5px; align-items:center;
+  }
+  .group-label {
+    font:9px monospace; color:#888; padding:0 4px;
+  }
+  button {
+    padding:5px 9px; font:10px monospace; border:1px solid #888;
+    background:#eee; cursor:pointer; border-radius:3px;
+  }
+  button.off { background:#ccc; color:#999; }
+  button.cam { background:#dde; border-color:#99a; }
+  #zoom-controls {
+    position:absolute; bottom:16px; right:16px;
+    display:flex; flex-direction:column; gap:4px;
+  }
+  #zoom-controls button { width:36px; height:36px; font-size:18px; padding:0; }
+  #angle-info {
+    position:absolute; bottom:60px; left:12px;
+    font:9px monospace; color:#999; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="legend-tr">
+  <span style="color:#cc2222">■ R</span>&nbsp;
+  <span style="color:#22aa44">■ G</span>&nbsp;
+  <span style="color:#2244cc">■ B</span>&nbsp;
+  T1 · C000 · F1<br>
+  <span style="color:#888">tetrahedron → cube</span>
+</div>
+
+<div id="angle-info" id="ainfo"></div>
+
+<div id="controls">
+  <div class="ctrl-group">
+    <span class="group-label">INSPECT</span>
+    <button id="btn-tet"  onclick="toggle('tet')">TET</button>
+    <button id="btn-f1"   onclick="toggle('f1')">F1</button>
+    <button id="btn-cube" onclick="toggle('cube')" class="off">CUBE</button>
+    <button id="btn-c000" onclick="toggle('c000')">C000</button>
+    <button id="btn-lbl"  onclick="toggle('lbl')">LABELS</button>
+  </div>
+  <div class="ctrl-group">
+    <span class="group-label">CAMERA</span>
+    <button class="cam" onclick="setCamera(0.55,-0.6)">DEFAULT</button>
+    <button class="cam" onclick="setCamera(0,0)">TOP</button>
+    <button class="cam" onclick="setCamera(1.57,0)">FRONT</button>
+    <button class="cam" onclick="setCamera(0.3,0.3)">RGB FACE</button>
+    <button class="cam" onclick="setCamera(0.9,-0.9)">SPINE</button>
+  </div>
+</div>
+
+<div id="zoom-controls">
+  <button onclick="zoom=Math.min(4,zoom*1.15)">+</button>
+  <button onclick="zoom=Math.max(0.2,zoom*0.87)">−</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize(){ W=canvas.width=window.innerWidth; H=canvas.height=window.innerHeight; }
+resize(); window.addEventListener('resize', resize);
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+let rotX=0.55, rotY=-0.6, zoom=1.0;
+let drag=false, lx, ly;
+function setCamera(rx,ry){ rotX=rx; rotY=ry; }
+
+canvas.addEventListener('mousedown', e=>{ drag=true; lx=e.clientX; ly=e.clientY; });
+canvas.addEventListener('mousemove', e=>{ if(!drag)return; rotY+=(e.clientX-lx)*.009; rotX+=(e.clientY-ly)*.009; lx=e.clientX; ly=e.clientY; });
+canvas.addEventListener('mouseup', ()=>drag=false);
+canvas.addEventListener('wheel', e=>{ zoom*=e.deltaY>0?.92:1.08; zoom=Math.max(.2,Math.min(4,zoom)); e.preventDefault(); },{passive:false});
+canvas.addEventListener('touchstart', e=>{ drag=true; lx=e.touches[0].clientX; ly=e.touches[0].clientY; },{passive:true});
+canvas.addEventListener('touchmove', e=>{ e.preventDefault(); rotY+=(e.touches[0].clientX-lx)*.009; rotX+=(e.touches[0].clientY-ly)*.009; lx=e.touches[0].clientX; ly=e.touches[0].clientY; },{passive:false});
+canvas.addEventListener('touchend', ()=>drag=false);
+
+// ── Visibility ────────────────────────────────────────────────────────────────
+const vis = { tet:true, f1:true, cube:false, c000:true, lbl:true };
+function toggle(k){
+  vis[k]=!vis[k];
+  document.getElementById('btn-'+k).classList.toggle('off',!vis[k]);
+}
+
+// ── 3D math ───────────────────────────────────────────────────────────────────
+function rot3(p,rx,ry){
+  let [x,y,z]=p;
+  let x1=x*Math.cos(ry)+z*Math.sin(ry), z1=-x*Math.sin(ry)+z*Math.cos(ry);
+  let y2=y*Math.cos(rx)-z1*Math.sin(rx), z2=y*Math.sin(rx)+z1*Math.cos(rx);
+  return [x1,y2,z2];
+}
+function proj(p){
+  const fov=460*zoom, z=p[2]+5.5;
+  return [W/2+p[0]*fov/z, H/2-p[1]*fov/z, z];
+}
+function P(p){ return proj(rot3(p,rotX,rotY)); }
+function depth(p){ return rot3(p,rotX,rotY)[2]; }
+
+// ── GEOMETRY — locked ─────────────────────────────────────────────────────────
+const S = 1.0;
+
+// Tetrahedron: regular, inscribed in cube, Set B
+const T1 = [-S,-S,-S];
+const R  = [-S, S, S];
+const G  = [ S,-S, S];
+const B  = [ S, S,-S];
+const C000 = [0,0,0];
+
+// Full cube corners
+const cv = [
+  [-S,-S,-S],[ S,-S,-S],[ S, S,-S],[-S, S,-S],
+  [-S,-S, S],[ S,-S, S],[ S, S, S],[-S, S, S],
+];
+
+// F1 cube: positive octant from C000=[0,0,0] to [S,S,S]
+const f1v = [
+  [0,0,0],[S,0,0],[0,S,0],[0,0,S],
+  [S,S,0],[S,0,S],[0,S,S],[S,S,S],
+];
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function avgD(verts){ return verts.reduce((s,v)=>s+depth(v),0)/verts.length; }
+
+function drawFace(verts,fill,stroke,lw){
+  const pts=verts.map(v=>P(v));
+  ctx.save(); ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+  ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1.2;ctx.stroke();}
+  ctx.restore();
+}
+
+function drawLine(a,b,col,lw,alpha,dash){
+  const pa=P(a),pb=P(b);
+  ctx.save(); ctx.globalAlpha=alpha||1; ctx.strokeStyle=col; ctx.lineWidth=lw||1;
+  if(dash) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
+  ctx.restore();
+}
+
+function drawArrow(a,b,col,lw){
+  const pa=P(a),pb=P(b);
+  const dx=pb[0]-pa[0],dy=pb[1]-pa[1],ang=Math.atan2(dy,dx),hs=8;
+  ctx.save(); ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=lw||2;
+  ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pb[0],pb[1]);
+  ctx.lineTo(pb[0]-hs*Math.cos(ang-.38),pb[1]-hs*Math.sin(ang-.38));
+  ctx.lineTo(pb[0]-hs*Math.cos(ang+.38),pb[1]-hs*Math.sin(ang+.38));
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function dot(p,col,r,ring){
+  const pp=P(p); ctx.save();
+  if(ring){ctx.strokeStyle=ring;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(pp[0],pp[1],r+3,0,Math.PI*2);ctx.stroke();}
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(pp[0],pp[1],r,0,Math.PI*2); ctx.fill(); ctx.restore();
+}
+
+// Depth-aware label — fades if behind geometry
+function lbl(p,txt,col,dx,dy){
+  const pp=P(p);
+  const d=depth(p);
+  const alpha=Math.max(0.3, Math.min(1.0, (d+3)/4));
+  ctx.save(); ctx.globalAlpha=alpha; ctx.fillStyle=col; ctx.font='bold 10px monospace';
+  ctx.fillText(txt,pp[0]+(dx||5),pp[1]+(dy||-5)); ctx.restore();
+}
+
+// ── Face lists ────────────────────────────────────────────────────────────────
+const tetFaces = [
+  {v:[T1,R,G],  fill:'rgba(200,80,80,0.1)',  stroke:'#cc4444',lw:1.5},
+  {v:[T1,G,B],  fill:'rgba(80,200,80,0.1)',  stroke:'#44cc44',lw:1.5},
+  {v:[T1,B,R],  fill:'rgba(80,80,200,0.1)',  stroke:'#4444cc',lw:1.5},
+  {v:[R,G,B],   fill:'rgba(160,160,80,0.1)', stroke:'rgba(140,140,60,0.5)',lw:1.2},
+];
+
+const f1Faces = [
+  {v:[f1v[0],f1v[1],f1v[4],f1v[2]], fill:'rgba(200,80,80,0.07)',  stroke:'rgba(180,60,60,0.4)',lw:1},
+  {v:[f1v[3],f1v[5],f1v[7],f1v[6]], fill:'rgba(200,80,80,0.07)',  stroke:'rgba(180,60,60,0.4)',lw:1},
+  {v:[f1v[0],f1v[1],f1v[5],f1v[3]], fill:'rgba(80,200,80,0.07)',  stroke:'rgba(60,180,60,0.4)',lw:1},
+  {v:[f1v[2],f1v[4],f1v[7],f1v[6]], fill:'rgba(80,200,80,0.07)',  stroke:'rgba(60,180,60,0.4)',lw:1},
+  {v:[f1v[0],f1v[2],f1v[6],f1v[3]], fill:'rgba(80,80,200,0.07)',  stroke:'rgba(60,60,180,0.4)',lw:1},
+  {v:[f1v[1],f1v[4],f1v[7],f1v[5]], fill:'rgba(80,80,200,0.07)',  stroke:'rgba(60,60,180,0.4)',lw:1},
+];
+
+const cubeFaces = [
+  {v:[cv[0],cv[1],cv[2],cv[3]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+  {v:[cv[4],cv[5],cv[6],cv[7]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+  {v:[cv[0],cv[1],cv[5],cv[4]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+  {v:[cv[3],cv[2],cv[6],cv[7]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+  {v:[cv[0],cv[3],cv[7],cv[4]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+  {v:[cv[1],cv[2],cv[6],cv[5]], fill:'rgba(0,0,0,0.02)',stroke:'rgba(0,0,0,0.15)',lw:0.6},
+];
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#e8e8e8'; ctx.fillRect(0,0,W,H);
+
+  // Tet legs — behind faces
+  if(vis.tet){
+    drawLine(T1,R,'#cc2222',2,0.6);
+    drawLine(T1,G,'#22aa44',2,0.6);
+    drawLine(T1,B,'#2244cc',2,0.6);
+    drawLine(T1,C000,'#666',1,0.35,[4,4]);
+    drawLine(R,G,'#888',1,0.35);
+    drawLine(G,B,'#888',1,0.35);
+    drawLine(B,R,'#888',1,0.35);
+  }
+
+  // F1 axes from C000
+  if(vis.f1){
+    drawArrow(C000,[S*1.1,0,0],'#cc2222',2);
+    drawArrow(C000,[0,S*1.1,0],'#22aa44',2);
+    drawArrow(C000,[0,0,S*1.1],'#2244cc',2);
+  }
+
+  // Depth-sort all faces
+  const allFaces=[];
+  if(vis.cube) cubeFaces.forEach(f=>allFaces.push(f));
+  if(vis.tet)  tetFaces.forEach(f=>allFaces.push(f));
+  if(vis.f1)   f1Faces.forEach(f=>allFaces.push(f));
+  allFaces.sort((a,b)=>avgD(b.v)-avgD(a.v));
+  for(const f of allFaces) drawFace(f.v,f.fill,f.stroke,f.lw);
+
+  // Dots — drawn after faces
+  if(vis.tet){
+    dot(T1,'#111',7,'#444');
+    dot(R,'#dd2222',6);
+    dot(G,'#22aa44',6);
+    dot(B,'#2244cc',6);
+  }
+  if(vis.c000) dot(C000,'#ffffff',6,'#333');
+  if(vis.f1)   dot(f1v[7],'#555',4,'#aaa');
+
+  // Labels — depth faded
+  if(vis.lbl){
+    if(vis.tet){
+      lbl(T1,' T1','#111',8,14);
+      lbl(R,' R','#cc2222');
+      lbl(G,' G','#22aa44');
+      lbl(B,' B','#2244cc');
+    }
+    if(vis.c000) lbl(C000,' C000','#111',8,5);
+    if(vis.f1){
+      lbl([S*1.1,0,0],'+X','#cc2222',5,-5);
+      lbl([0,S*1.1,0],'+Y','#22aa44',5,-5);
+      lbl([0,0,S*1.1],'+Z','#2244cc',5,-5);
+      lbl(f1v[7],' F1','#555',5,-5);
+    }
+  }
+
+  // Camera info
+  document.getElementById('angle-info').textContent =
+    `rotX:${rotX.toFixed(2)} rotY:${rotY.toFixed(2)} zoom:${zoom.toFixed(2)}`;
+
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>
+
